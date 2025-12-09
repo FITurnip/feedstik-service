@@ -1,7 +1,9 @@
 import azure.functions as func
-from azure.storage.blob import BlobServiceClient # type: ignore
+from azure.storage.blob import BlobServiceClient
+from azure.cosmos import CosmosClient, PartitionKey
 import uuid
 import logging
+import json
 
 app = func.FunctionApp()
 
@@ -9,7 +11,18 @@ app = func.FunctionApp()
 BLOB_CONN_STRING = "DefaultEndpointsProtocol=https;AccountName=uploadvidservicefunc123;AccountKey=gKt+BNW0iCObVQT7al9DfjKVqRgiCzC78c9zRBWfVg8hrPndGIRibwQl8pkINrrl1+Ts25lxtRFI+ASto3f3YQ==;EndpointSuffix=core.windows.net"
 BLOB_CONTAINER_NAME = "videos"
 
+# KONFIGURASI COSMOS DB
+COSMOS_DB_ENDPOINT = "https://tiktok.documents.azure.com:443/"
+COSMOS_DB_KEY = "OYNwhYosf6V4QaDxBIjgm2FkZXw53W0pErxYJyMKVZEGhXsdYhNLeOWvvq77DiWqpgu0uc4KrzPiACDb3WfdwQ=="
+COSMOS_DB_DATABASE_NAME = "VideoMetadataDB"
+COSMOS_DB_CONTAINER_NAME = "Videos"
 
+def get_cosmos_client():
+    client = CosmosClient(COSMOS_DB_ENDPOINT, COSMOS_DB_KEY)
+    database = client.get_database_client(COSMOS_DB_DATABASE_NAME)
+    container = database.get_container_client(COSMOS_DB_CONTAINER_NAME)
+    return container
+    
 @app.route(route="uploadVideo", auth_level=func.AuthLevel.FUNCTION, methods=["POST"])
 def upload_video(req: func.HttpRequest) -> func.HttpResponse:
     try:
@@ -34,7 +47,9 @@ def upload_video(req: func.HttpRequest) -> func.HttpResponse:
 
         # Generate nama file unik
         ext = file.filename.split(".")[-1]
-        file_name = f"{uuid.uuid4()}.{ext}"
+        file_id = str(uuid.uuid4())
+        file_name = f"{file_id}.{ext}"
+        #file_name = f"{uuid.uuid4()}.{ext}"
 
         # Upload ke Blob Storage
         blob_service = BlobServiceClient.from_connection_string(BLOB_CONN_STRING)
@@ -45,14 +60,31 @@ def upload_video(req: func.HttpRequest) -> func.HttpResponse:
             data=file.stream,
             overwrite=False
         )
+        
+        storage_account_name = BLOB_CONN_STRING.split("AccountName=")[1].split(";")[0]
+        video_url = f"https://{storage_account_name}.blob.core.windows.net/{BLOB_CONTAINER_NAME}/{file_name}"
 
-        video_url = f"https://YOUR_STORAGE_ACCOUNT.blob.core.windows.net/{BLOB_CONTAINER_NAME}/{file_name}"
+        logging.info(f"Upload ke Blob sukses: {video_url}")
 
-        logging.info(f"Upload sukses: {video_url}")
+        # Data metadata yang akan disimpan
+        video_metadata = {
+            "id": file_id, # Cosmos DB memerlukan field 'id' unik
+            "fileName": file_name,
+            "originalFileName": file.filename,
+            "contentType": file.content_type,
+            "blobUrl": video_url,
+            "uploadTime": str(func.get_current_utc_time()),
+            "status": "uploaded" # Contoh field lain
+            # Anda bisa menambahkan data lain seperti userId, description, dll.
+        }
 
+        cosmos_container = get_cosmos_client()
+        cosmos_container.create_item(body=video_metadata)
+        
+        logging.info(f"Metadata disimpan di Cosmos DB untuk ID: {file_id}")
         # Return URL
         return func.HttpResponse(
-            body=f'{{"message":"Upload success","url":"{video_url}"}}',
+            body=json.dumps({"message":"Upload success", "id": file_id, "url": video_url}),
             mimetype="application/json",
             status_code=200,
         )

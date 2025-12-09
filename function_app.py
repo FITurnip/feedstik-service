@@ -46,22 +46,56 @@ def get_video(req: func.HttpRequest) -> func.HttpResponse:
 @app.route(route="videos", methods=["GET"])
 def list_videos(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        blob_service = BlobServiceClient.from_connection_string(BLOB_CONN_STRING)
-        container_client = blob_service.get_container_client(BLOB_CONTAINER_NAME)
+        logging.info("Memulai pengambilan daftar video dari Cosmos DB...")
+        
+        cosmos_container = get_cosmos_client()
 
-        blobs = container_client.list_blobs()
+        # Kita ambil SEMUA data metadata yang relevan untuk FEEDS
+        # Termasuk fileName, userId, dan likes
+        query = "SELECT c.id, c.fileName, c.userId, c.likes, c.uploadTime FROM c ORDER BY c.uploadTime DESC"
+        
+        # Eksekusi kueri
+        # Gunakan max_item_count untuk performa jika data sudah banyak
+        items = list(cosmos_container.query_items(
+            query=query, 
+            enable_cross_partition_query=True,
+            # Ambil 50 item teratas saja (untuk feed)
+            max_item_count=50 
+        ))
+        
+        # Mengubah hasil kueri menjadi daftar objek
+        video_list = []
+        storage_account_name = BLOB_CONN_STRING.split("AccountName=")[1].split(";")[0]
 
-        # hanya kirim fileName, lebih bersih
-        files = [blob.name for blob in blobs]
+        for item in items:
+            # Menggabungkan data Cosmos DB dengan URL Blob Storage
+            file_name = item.get("fileName")
+            video_url = f"https://{storage_account_name}.blob.core.windows.net/{BLOB_CONTAINER_NAME}/{file_name}"
+            
+            video_list.append({
+                "id": item.get("id"),
+                "uploaderId": item.get("userId"),
+                "fileName": file_name,
+                "blobUrl": video_url, # URL penuh untuk tag <video>
+                "likes": item.get("likes", 0), # Default 0 jika tidak ada
+                "uploadTime": item.get("uploadTime"),
+                "caption": f"Ini adalah video dari user {item.get('userId')}" # Contoh Caption Sederhana
+                # Tambahkan properti lain (misal: user_profile_pic, music_title) di sini
+            })
 
+        logging.info(f"Berhasil mengambil {len(video_list)} metadata video.")
+        
+        # Mengembalikan daftar objek metadata (termasuk URL)
         return func.HttpResponse(
-            body=json.dumps({"videos": files}),
+            body=json.dumps({"videos": video_list}),
             mimetype="application/json",
             status_code=200
         )
 
     except Exception as e:
+        logging.error(f"Error fetching videos from Cosmos DB: {str(e)}")
         return func.HttpResponse(
-            f"Error fetching videos: {str(e)}",
+            json.dumps({"error": f"Error fetching videos: {str(e)}"}),
+            mimetype="application/json",
             status_code=500
         )

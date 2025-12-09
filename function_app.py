@@ -124,13 +124,11 @@ def list_videos(req: func.HttpRequest) -> func.HttpResponse:
 
         blobs = container_client.list_blobs()
 
-        video_urls = [
-            f"https://uploadvidservicefunc123.blob.core.windows.net/{BLOB_CONTAINER_NAME}/{blob.name}"
-            for blob in blobs
-        ]
+        # hanya kirim fileName, lebih bersih
+        files = [blob.name for blob in blobs]
 
         return func.HttpResponse(
-            body=str(video_urls),
+            body=json.dumps({"videos": files}),
             mimetype="application/json",
             status_code=200
         )

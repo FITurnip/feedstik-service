@@ -50,42 +50,41 @@ def list_videos(req: func.HttpRequest) -> func.HttpResponse:
         
         cosmos_container = get_cosmos_client()
 
-        # Kita ambil SEMUA data metadata yang relevan untuk FEEDS
-        # Termasuk fileName, userId, dan likes
-        query = "SELECT c.id, c.fileName, c.userId, c.likes, c.uploadTime FROM c ORDER BY c.uploadTime DESC"
+        # --- [PERBAIKAN UTAMA DI SINI] ---
+        # Ganti SELECT spesifik dengan SELECT * agar caption (dan field lain) terbawa otomatis
+        query = "SELECT * FROM c ORDER BY c.uploadTime DESC"
+        # ---------------------------------
         
-        # Eksekusi kueri
-        # Gunakan max_item_count untuk performa jika data sudah banyak
         items = list(cosmos_container.query_items(
             query=query, 
             enable_cross_partition_query=True,
-            # Ambil 50 item teratas saja (untuk feed)
             max_item_count=50 
         ))
         
-        # Mengubah hasil kueri menjadi daftar objek
         video_list = []
         storage_account_name = BLOB_CONN_STRING.split("AccountName=")[1].split(";")[0]
 
         for item in items:
-            # Menggabungkan data Cosmos DB dengan URL Blob Storage
             file_name = item.get("fileName")
             video_url = f"https://{storage_account_name}.blob.core.windows.net/{BLOB_CONTAINER_NAME}/{file_name}"
             
+            # Prioritaskan username jika ada, kalau tidak pakai userId
+            uploader_display = item.get("username") or item.get("userId")
+
             video_list.append({
                 "id": item.get("id"),
-                "uploaderId": item.get("userId"),
+                "uploaderId": uploader_display, # Update agar menampilkan username, bukan ID aneh
                 "fileName": file_name,
-                "blobUrl": video_url, # URL penuh untuk tag <video>
-                "likes": item.get("likes", 0), # Default 0 jika tidak ada
+                "blobUrl": video_url,
+                "likes": item.get("likes", 0),
                 "uploadTime": item.get("uploadTime"),
-                "caption": f"Ini adalah video dari user {item.get('userId')}" # Contoh Caption Sederhana
-                # Tambahkan properti lain (misal: user_profile_pic, music_title) di sini
+                
+                # Sekarang ini akan berfungsi karena query-nya sudah SELECT *
+                "caption": item.get('caption', '') 
             })
 
         logging.info(f"Berhasil mengambil {len(video_list)} metadata video.")
         
-        # Mengembalikan daftar objek metadata (termasuk URL)
         return func.HttpResponse(
             body=json.dumps({"videos": video_list}),
             mimetype="application/json",
